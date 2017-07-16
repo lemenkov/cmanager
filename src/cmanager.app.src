@@ -1,0 +1,15 @@
+{application, cmanager,
+ [
+  {description, "cmanager app"},
+  {vsn, "1"},
+  {modules, [
+             cmanager
+            ]},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib
+                 ]},
+  {mod, { cmanager_app, []}},
+  {env, []}
+ ]}.
