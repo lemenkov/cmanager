@@ -51,7 +51,7 @@ start_link() ->
 %% ------------------------------------------------------------------
 
 init(Args) ->
-    random:seed(erlang:now()),
+    rand:seed(exsplus),
     {ok, Args}.
 
 handle_call({req, Method, Path, PerhapsJson}, From, State) ->
@@ -100,15 +100,18 @@ process_json_request('GET', ["coffee", "buy", [ $: | UserId], [ $: | MachineId] 
 
 process_json_request('GET', ["stats", "coffee"], Json, From) ->
         error_logger:warning_msg("GET stats coffee.~n"),
-	gen_server:reply(From, {501, [{<<"error_text">>,<<"not implemented here.">>}, {<<"error_code">>, 501}]});
+	Result = return_transactions('_', '_'),
+	gen_server:reply(From, {200, Result});
 
 process_json_request('GET', ["stats", "coffee", "machine", [ $: | MachineId] ], Json, From) ->
         error_logger:warning_msg("GET stats coffee machine: ~p.~n", [MachineId]),
-	gen_server:reply(From, {501, [{<<"error_text">>,<<"not implemented here.">>}, {<<"error_code">>, 501}]});
+	Result = return_transactions('_', list_to_binary(MachineId)),
+	gen_server:reply(From, {200, Result});
 
 process_json_request('GET', ["stats", "coffee", "user", [ $: | UserId] ], Json, From) ->
         error_logger:warning_msg("GET stats coffee user: ~p.~n", [UserId]),
-	gen_server:reply(From, {501, [{<<"error_text">>,<<"not implemented here.">>}, {<<"error_code">>, 501}]});
+	Result = return_transactions(list_to_binary(UserId), '_'),
+	gen_server:reply(From, {200, Result});
 
 process_json_request('GET', ["stats", "level", "user", [ $: | UserId] ], Json, From) ->
         error_logger:warning_msg("GET stats level user: ~p.~n", [UserId]),
@@ -121,9 +124,9 @@ process_json_request('PUT', ["user", "request"], Json, From) ->
 	Email = proplists:get_value(<<"email">>, Json),
 
 	% Check for already existing login
-	PossibleEmail = ets:match(users, {Login, '_', '$1'}),
+	PossibleEmail = ets:match(users, {Login, '_', '$1', '_'}),
 	% Check for already existing email
-	PossibleLogin = ets:match(users, {'$1', '_', Email}),
+	PossibleLogin = ets:match(users, {'$1', '_', Email, '_'}),
 
 	case {PossibleLogin, PossibleEmail} of
 		{[], []} -> % Register a new user
@@ -202,9 +205,29 @@ process_json_request('POST', ["machine"], Json, From) ->
 			)
 	end;
 	
-process_json_request(Method, Path, Json, From) ->
+process_json_request(_Method, _Path, _Json, From) ->
 	gen_server:reply(From, {488, [{<<"error_text">>,<<"Don't know what to do.">>}, {<<"error_code">>, 488}]}).
 
+return_transactions(User, Machine) ->
+	Result = ets:select(transactions, [{ {'_', User, Machine, '_'}, [], ['$_'] } ]),
+        error_logger:warning_msg("Stats: ~p.~n", [Result]),
+	[
+	 begin
+		 [[L, P, E]] = ets:match(users, {'$1', '$2', '$3', UId}),
+		 error_logger:warning_msg("Stats1: ~p.~n", [{[L, P, E], UId}]),
+		 [[M]] = ets:match(machines, {'$1', '_', MId}),
+		 error_logger:warning_msg("Stats2: ~p.~n", [{[M], MId}]),
+		 [
+		  {<<"timestamp">>, TS},
+		  {<<"machine">>, [
+				   {<<"name">>, M}, { <<"id">>, MId}
+				  ]},
+		  {<<"user">>, [
+				{<<"login">>, L}, { <<"password">>, P}, {<<"email">>, E}
+			       ]}
+		 ]
+	 end ||  {TS, UId, MId, _CL} <- Result].
+
 make_hash(Prefix) ->
-	[Hash] = io_lib:format("~p", [erlang:phash2({node(), now()})]),
+	[Hash] = io_lib:format("~p", [erlang:phash2({node(), os:timestamp()})]),
 	list_to_binary(Prefix ++ Hash).
