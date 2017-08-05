@@ -3,4 +3,4 @@ all:
 
 check: test
 test: all
-	@echo TODO
+	rebar eunit -v

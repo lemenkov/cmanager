@@ -27,7 +27,7 @@
 -behaviour(application).
 
 %% Application callbacks
--export([start/0, start/2, stop/1]).
+-export([start/0, start/2, stop/0, stop/1]).
 
 start() ->
     application:start(cmanager).
@@ -39,5 +39,10 @@ start() ->
 start(_StartType, _StartArgs) ->
     cmanager_sup:start_link().
 
-stop(_State) ->
+stop() ->
+    [supervisor:terminate_child(cmanager_sup, SID) || {SID,_,_,_} <- supervisor:which_children(cmanager_sup)],
+    % Almost any casted message will kill supervisor
+    gen_server:cast(cmanager_sup, stop),
     ok.
+stop(_State) ->
+    stop().

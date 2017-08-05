@@ -77,26 +77,31 @@ code_change(_OldVsn, State, _Extra) ->
 %% Internal Function Definitions
 %% ------------------------------------------------------------------
 
+% Allow empty payload (treat it as an empty JSON struct)
+process_raw_request(Method, Path, <<>>, From) ->
+    process_json_request(Method, Path, [], From);
 process_raw_request(Method, Path, PerhapsJson, From) ->
     case (catch mochijson2:decode(PerhapsJson)) of
 	    {struct, Json} ->
 		    process_json_request(Method, Path, Json, From);
-	    _ ->
+	    Any ->
 		    % FIXME should we just die here? W/o reply.
+		    error_logger:warning_msg("Not a valid JSON ~p.~nError (400): ~p~n", [PerhapsJson, Any]),
 		    gen_server:reply(From, {400, [{<<"error_text">>,<<"not a valid JSON">>}, {<<"error_code">>, 400}]})
     end.
 
 process_json_request('PUT', ["coffee", "buy", [ $: | UserId], [ $: | MachineId] ], Json, From) ->
         error_logger:warning_msg("PUT coffee buy: ~p ~p.~n", [UserId, MachineId]),
 	Timestamp = proplists:get_value(<<"timestamp">>, Json),
-	<<Caffeine>> = list_to_binary(ets:match(machines, {'_', '$1', list_to_binary(MachineId)})),
+	%<<Caffeine>> = list_to_binary(ets:match(machines, {'_', '$1', list_to_binary(MachineId)})),
+	[[Caffeine]] = ets:match(machines, {'_', '$1', list_to_binary(MachineId)}),
         error_logger:warning_msg("PUT coffee buy: ~p ~p ~p ~p.~n", [UserId, MachineId, Timestamp, Caffeine]),
-	ets:insert_new(transactions, {Timestamp, list_to_binary(UserId), list_to_binary(MachineId), Caffeine}),
+	ets:insert_new(transactions, {os:timestamp(), Timestamp, list_to_binary(UserId), list_to_binary(MachineId), Caffeine}),
 	gen_server:reply(From, {200, []});
 
 process_json_request('GET', ["coffee", "buy", [ $: | UserId], [ $: | MachineId] ], Json, From) ->
         error_logger:warning_msg("GET coffee buy: ~p ~p.~n", [UserId, MachineId]),
-	process_json_request('PUT', ["coffee", "buy", [ $: | UserId], [ $: | MachineId] ], Json ++ [{<<"timestamp">>, os:system_time()}], From);
+	process_json_request('PUT', ["coffee", "buy", [ $: | UserId], [ $: | MachineId] ], Json ++ [{<<"timestamp">>, iso8601:format(calendar:universal_time())}], From);
 
 process_json_request('GET', ["stats", "coffee"], Json, From) ->
         error_logger:warning_msg("GET stats coffee.~n"),
@@ -117,6 +122,31 @@ process_json_request('GET', ["stats", "level", "user", [ $: | UserId] ], Json, F
         error_logger:warning_msg("GET stats level user: ~p.~n", [UserId]),
 	gen_server:reply(From, {501, [{<<"error_text">>,<<"not implemented here.">>}, {<<"error_code">>, 501}]});
 
+%%
+%% Undocumented API
+%%
+
+process_json_request('GET', ["id", "user", Login], _, From) ->
+        error_logger:warning_msg("[UNDOCUMENTED] GET id user: ~p.~n", [Login]),
+	[[UserId]] = ets:match(users, {list_to_binary(Login), '_', '_', '$1'}),
+	gen_server:reply(From,
+			 {200, [
+				{<<"login">>, Login},
+				{<<"id">>, UserId}
+			       ]
+			 }
+			);
+process_json_request('GET', ["id", "machine", Name], _, From) ->
+        error_logger:warning_msg("[UNDOCUMENTED] GET id machine: ~p.~n", [Name]),
+	[[MachineId]] = ets:match(machines, {list_to_binary(Name), '_', '$1'}),
+	gen_server:reply(From,
+			 {200, [
+				{<<"name">>, Name},
+				{<<"id">>, MachineId}
+			       ]
+			 }
+	);
+
 process_json_request('PUT', ["user", "request"], Json, From) ->
 	% FIXME validate with Jesse
 	Login = proplists:get_value(<<"login">>, Json),
@@ -127,6 +157,8 @@ process_json_request('PUT', ["user", "request"], Json, From) ->
 	PossibleEmail = ets:match(users, {Login, '_', '$1', '_'}),
 	% Check for already existing email
 	PossibleLogin = ets:match(users, {'$1', '_', Email, '_'}),
+
+	%error_logger:error_msg("DATA: ~p ~p ~p ~p~n", [Login, Email, PossibleLogin, PossibleEmail]),
 
 	case {PossibleLogin, PossibleEmail} of
 		{[], []} -> % Register a new user
@@ -152,24 +184,24 @@ process_json_request('PUT', ["user", "request"], Json, From) ->
 					       ]
 					 }
 			);
-		{[[Login]], _} ->  % Username already taken
+		{[[_]], _} ->  % Email already taken
 			gen_server:reply(From,
 					 % FIXME should it be 303 See Other?
 					 {409, [
 						{<<"error_code">>, 409},
 						{<<"error_text">>, <<"username already taken">>},
-						{<<"login">>, Login}
+						{<<"email">>, Email}
 					       ]
 					 }
 			);
-		{_, [[Email]]} -> % Email already taken
+		{_, [[_]]} -> % Login already taken
 			gen_server:reply(From,
 					 % FIXME should it be 303 See Other?
 					 % FIXME should we say that email is known? Privacy concern.
 					 {409, [
 						{<<"error_code">>, 409},
 						{<<"error_text">>, <<"email already taken">>},
-						{<<"email">>, Email}
+						{<<"login">>, Login}
 					       ]
 					 }
 			)
@@ -209,7 +241,7 @@ process_json_request(_Method, _Path, _Json, From) ->
 	gen_server:reply(From, {488, [{<<"error_text">>,<<"Don't know what to do.">>}, {<<"error_code">>, 488}]}).
 
 return_transactions(User, Machine) ->
-	Result = ets:select(transactions, [{ {'_', User, Machine, '_'}, [], ['$_'] } ]),
+	Result = ets:select(transactions, [{ {'_', '_', User, Machine, '_'}, [], ['$_'] } ]),
         error_logger:warning_msg("Stats: ~p.~n", [Result]),
 	[
 	 begin
@@ -226,7 +258,7 @@ return_transactions(User, Machine) ->
 				{<<"login">>, L}, { <<"password">>, P}, {<<"email">>, E}
 			       ]}
 		 ]
-	 end ||  {TS, UId, MId, _CL} <- Result].
+	 end ||  {_, TS, UId, MId, _CL} <- Result].
 
 make_hash(Prefix) ->
 	[Hash] = io_lib:format("~p", [erlang:phash2({node(), os:timestamp()})]),
