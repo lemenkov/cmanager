@@ -183,7 +183,7 @@ coffee_buy_test_() ->
                ?assertEqual(0, length(ListOfJsons))
 	   end
 	  },
-	  {"Test coffee ordering for the 1st user (with forged timestamp)",
+	  {"Test coffee ordering for the 3rd user (with forged timestamp)",
 	   fun() ->
 	       UserId = cmanager_test_helper:get_id(<<"user">>, <<"another_user3">>),
 	       MachineId = cmanager_test_helper:get_id(<<"machine">>, <<"machine3">>),
@@ -197,6 +197,24 @@ coffee_buy_test_() ->
 	       {ok, {{"HTTP/1.1", 200, "OK"}, _, JsonStr}} = httpc:request(get, {"http://127.0.0.1:8080/stats/coffee/user/:" ++ binary_to_list(UserId), []}, [], []),
                [{struct, JsonProplist}] = mochijson2:decode(JsonStr),
                ?assertEqual(Time, proplists:get_value(<<"timestamp">>, JsonProplist))
+	   end
+	  },
+	  {"Get statistics of a coffee level for the 1sth user (with forged timestamps this time)",
+	   fun() ->
+	       UserId = cmanager_test_helper:get_id(<<"user">>, <<"peter_lemenkov">>),
+	       MachineId = cmanager_test_helper:get_id(<<"machine">>, <<"machine3">>),
+	       Url = "http://127.0.0.1:8080/coffee/buy/:" ++ binary_to_list(UserId) ++ "/:" ++ binary_to_list(MachineId),
+	       {Date, {H,M,S}} = calendar:universal_time(),
+	       % Let's drink cofee 6 hours ago so it already half-decayed
+	       Time = iso8601:format(calendar:gregorian_seconds_to_datetime(calendar:datetime_to_gregorian_seconds({Date, {H-6,M,S}}))),
+	       Json = [{<<"timestamp">>,Time}],
+	       Headers = [],
+	       ContentType = "application/json",
+	       Body = iolist_to_binary(mochijson2:encode(Json)),
+	       {ok, {{"HTTP/1.1", 200, "OK"}, _, _}} = httpc:request(put, {Url, Headers, ContentType, Body}, [], []),
+	       {ok, {{"HTTP/1.1", 200, "OK"}, _, JsonStr}} = httpc:request(get, {"http://127.0.0.1:8080/stats/level/user/:" ++ binary_to_list(UserId), []}, [], []),
+               ListOfJsons = mochijson2:decode(JsonStr),
+               ?assertEqual(25, length(ListOfJsons))
 	   end
 	  }
 	 ]

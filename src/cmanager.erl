@@ -103,24 +103,34 @@ process_json_request('GET', ["coffee", "buy", [ $: | UserId], [ $: | MachineId] 
         error_logger:warning_msg("GET coffee buy: ~p ~p.~n", [UserId, MachineId]),
 	process_json_request('PUT', ["coffee", "buy", [ $: | UserId], [ $: | MachineId] ], Json ++ [{<<"timestamp">>, iso8601:format(calendar:universal_time())}], From);
 
-process_json_request('GET', ["stats", "coffee"], Json, From) ->
+process_json_request('GET', ["stats", "coffee"], _Json, From) ->
         error_logger:warning_msg("GET stats coffee.~n"),
 	Result = return_transactions('_', '_'),
 	gen_server:reply(From, {200, Result});
 
-process_json_request('GET', ["stats", "coffee", "machine", [ $: | MachineId] ], Json, From) ->
+process_json_request('GET', ["stats", "coffee", "machine", [ $: | MachineId] ], _Json, From) ->
         error_logger:warning_msg("GET stats coffee machine: ~p.~n", [MachineId]),
 	Result = return_transactions('_', list_to_binary(MachineId)),
 	gen_server:reply(From, {200, Result});
 
-process_json_request('GET', ["stats", "coffee", "user", [ $: | UserId] ], Json, From) ->
+process_json_request('GET', ["stats", "coffee", "user", [ $: | UserId] ], _Json, From) ->
         error_logger:warning_msg("GET stats coffee user: ~p.~n", [UserId]),
 	Result = return_transactions(list_to_binary(UserId), '_'),
 	gen_server:reply(From, {200, Result});
 
-process_json_request('GET', ["stats", "level", "user", [ $: | UserId] ], Json, From) ->
+process_json_request('GET', ["stats", "level", "user", [ $: | UserId] ], _Json, From) ->
         error_logger:warning_msg("GET stats level user: ~p.~n", [UserId]),
-	gen_server:reply(From, {501, [{<<"error_text">>,<<"not implemented here.">>}, {<<"error_code">>, 501}]});
+	Result = ets:match(transactions, {'_', '$1', list_to_binary(UserId), '_', '$2'}),
+        error_logger:warning_msg("GET stats level user[~p]: ~p.~n", [UserId, Result]),
+	{{Yy,Mm,Dd},{Hr,Mi,Se}} = calendar:universal_time(),
+	gen_server:reply(From, {200,
+		[
+		 [
+		  { <<"timestamp">>, to_iso8601({{Yy,Mm,Dd},{Hr-X,Mi,Se}})},
+		  {<<"level">>, lists:foldl(fun(E,A) -> calculate_level({{Yy,Mm,Dd},{Hr-X,Mi,Se}}, E, A) end, 0, Result)}
+		 ] || X <- lists:seq(24, 0, -1)
+		]
+			       });
 
 %%
 %% Undocumented API
@@ -260,6 +270,28 @@ return_transactions(User, Machine) ->
 		 ]
 	 end ||  {_, TS, UId, MId, _CL} <- Result].
 
+%%
+%% Helpers
+%%
+
 make_hash(Prefix) ->
 	[Hash] = io_lib:format("~p", [erlang:phash2({node(), os:timestamp()})]),
 	list_to_binary(Prefix ++ Hash).
+
+to_iso8601(DateTime) ->
+	iso8601:format(calendar:gregorian_seconds_to_datetime(calendar:datetime_to_gregorian_seconds(DateTime))).
+
+calculate_level(DateTime, [Iso8601Date, Level], Acc) ->
+       Acc + calculate_level_1(calendar:datetime_to_gregorian_seconds(DateTime), calendar:datetime_to_gregorian_seconds(iso8601:parse(Iso8601Date)), Level).
+
+calculate_level_1(CurrentTime, ConsumptionTime, Level) when CurrentTime < ConsumptionTime ->
+        error_logger:warning_msg("Not consumed yet: ~p > ~p.~n", [ConsumptionTime, CurrentTime]),
+	0;
+calculate_level_1(CurrentTime, ConsumptionTime, Level) when CurrentTime < ConsumptionTime + 3600 ->
+        error_logger:warning_msg("Level is rising: ~p < ~p.~n", [ConsumptionTime, CurrentTime]),
+	trunc(((CurrentTime - ConsumptionTime) / 3600) * Level + 0.5);
+calculate_level_1(CurrentTime, ConsumptionTime, Level) ->
+        error_logger:warning_msg("Level is deteriorating: ~p < ~p.~n", [ConsumptionTime, CurrentTime]),
+	Lambda = math:log(2) / (5*3600),
+	TimeOfDecay = CurrentTime - (ConsumptionTime + 3600),
+	trunc(Level * math:exp(-1 * Lambda * TimeOfDecay) + 0.5).
