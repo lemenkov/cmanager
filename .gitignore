@@ -5,4 +5,5 @@
 *~
 .eunit/
 .rebar/
+deps/
 ebin/

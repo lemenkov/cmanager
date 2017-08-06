@@ -24,7 +24,6 @@
 -module(cmanager).
 
 -behaviour(gen_server).
--compile({parse_transform, do}).
 
 %% ------------------------------------------------------------------
 %% API Function Exports
@@ -67,7 +66,9 @@ handle_cast(_Msg, State) ->
 handle_info(_Info, State) ->
     {noreply, State}.
 
-terminate(_Reason, _State) ->
+terminate(Reason, _State) ->
+    {memory, Bytes} = erlang:process_info(self(), memory),
+    error_logger:warning_msg("cmanager: terminated due to reason [~p] (allocated ~b bytes)", [Reason, Bytes]),
     ok.
 
 code_change(_OldVsn, State, _Extra) ->
@@ -93,9 +94,7 @@ process_raw_request(Method, Path, PerhapsJson, From) ->
 process_json_request('PUT', ["coffee", "buy", [ $: | UserId], [ $: | MachineId] ], Json, From) ->
         error_logger:warning_msg("PUT coffee buy: ~p ~p.~n", [UserId, MachineId]),
 	Timestamp = proplists:get_value(<<"timestamp">>, Json),
-	%<<Caffeine>> = list_to_binary(ets:match(machines, {'_', '$1', list_to_binary(MachineId)})),
 	[[Caffeine]] = ets:match(machines, {'_', '$1', list_to_binary(MachineId)}),
-        error_logger:warning_msg("PUT coffee buy: ~p ~p ~p ~p.~n", [UserId, MachineId, Timestamp, Caffeine]),
 	ets:insert_new(transactions, {os:timestamp(), Timestamp, list_to_binary(UserId), list_to_binary(MachineId), Caffeine}),
 	gen_server:reply(From, {200, []});
 
@@ -121,7 +120,6 @@ process_json_request('GET', ["stats", "coffee", "user", [ $: | UserId] ], _Json,
 process_json_request('GET', ["stats", "level", "user", [ $: | UserId] ], _Json, From) ->
         error_logger:warning_msg("GET stats level user: ~p.~n", [UserId]),
 	Result = ets:match(transactions, {'_', '$1', list_to_binary(UserId), '_', '$2'}),
-        error_logger:warning_msg("GET stats level user[~p]: ~p.~n", [UserId, Result]),
 	{{Yy,Mm,Dd},{Hr,Mi,Se}} = calendar:universal_time(),
 	gen_server:reply(From, {200,
 		[
@@ -256,9 +254,7 @@ return_transactions(User, Machine) ->
 	[
 	 begin
 		 [[L, P, E]] = ets:match(users, {'$1', '$2', '$3', UId}),
-		 error_logger:warning_msg("Stats1: ~p.~n", [{[L, P, E], UId}]),
 		 [[M]] = ets:match(machines, {'$1', '_', MId}),
-		 error_logger:warning_msg("Stats2: ~p.~n", [{[M], MId}]),
 		 [
 		  {<<"timestamp">>, TS},
 		  {<<"machine">>, [
@@ -284,14 +280,10 @@ to_iso8601(DateTime) ->
 calculate_level(DateTime, [Iso8601Date, Level], Acc) ->
        Acc + calculate_level_1(calendar:datetime_to_gregorian_seconds(DateTime), calendar:datetime_to_gregorian_seconds(iso8601:parse(Iso8601Date)), Level).
 
-calculate_level_1(CurrentTime, ConsumptionTime, Level) when CurrentTime < ConsumptionTime ->
-        error_logger:warning_msg("Not consumed yet: ~p > ~p.~n", [ConsumptionTime, CurrentTime]),
-	0;
+calculate_level_1(CurrentTime, ConsumptionTime, Level) when CurrentTime < ConsumptionTime -> 0;
 calculate_level_1(CurrentTime, ConsumptionTime, Level) when CurrentTime < ConsumptionTime + 3600 ->
-        error_logger:warning_msg("Level is rising: ~p < ~p.~n", [ConsumptionTime, CurrentTime]),
 	trunc(((CurrentTime - ConsumptionTime) / 3600) * Level + 0.5);
 calculate_level_1(CurrentTime, ConsumptionTime, Level) ->
-        error_logger:warning_msg("Level is deteriorating: ~p < ~p.~n", [ConsumptionTime, CurrentTime]),
 	Lambda = math:log(2) / (5*3600),
 	TimeOfDecay = CurrentTime - (ConsumptionTime + 3600),
 	trunc(Level * math:exp(-1 * Lambda * TimeOfDecay) + 0.5).
